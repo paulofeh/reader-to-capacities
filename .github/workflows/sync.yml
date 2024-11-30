@@ -1,0 +1,64 @@
+name: Reader to Capacities Sync
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # Runs every 6 hours
+  workflow_dispatch:  # Allows manual trigger
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Download sync history
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        if curl -H "Authorization: token $GH_TOKEN" -H "Accept: application/vnd.github.v3.raw" -o sync_history.json https://api.github.com/repos/${{ github.repository }}/contents/sync_history.json; then
+          echo "Sync history downloaded"
+        else
+          echo "{\"last_sync\": null, \"synced_articles\": {}}" > sync_history.json
+          echo "Created new sync history"
+        fi
+        
+    - name: Run sync script
+      env:
+        READER_TOKEN: ${{ secrets.READER_TOKEN }}
+        CAPACITIES_TOKEN: ${{ secrets.CAPACITIES_TOKEN }}
+        CAPACITIES_SPACE_ID: ${{ secrets.CAPACITIES_SPACE_ID }}
+      run: python sync.py
+        
+    - name: Upload sync history
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        CONTENT=$(base64 -w 0 sync_history.json)
+        SHA=$(curl -s -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${{ github.repository }}/contents/sync_history.json | jq -r .sha || echo "")
+        
+        if [ -n "$SHA" ]; then
+          # File exists, update it
+          curl -X PUT \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Content-Type: application/json" \
+            https://api.github.com/repos/${{ github.repository }}/contents/sync_history.json \
+            -d "{\"message\": \"Update sync history\", \"content\": \"$CONTENT\", \"sha\": \"$SHA\"}"
+        else
+          # File doesn't exist, create it
+          curl -X PUT \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Content-Type: application/json" \
+            https://api.github.com/repos/${{ github.repository }}/contents/sync_history.json \
+            -d "{\"message\": \"Create sync history\", \"content\": \"$CONTENT\"}"
+        fi
