@@ -1,7 +1,9 @@
 name: Sync Readwise Articles to Capacities
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # Keep manual trigger
+  schedule:
+    - cron: '0 */12 * * *'  # Runs every 12 hours
 
 permissions:
   contents: write    # This allows the workflow to push changes
