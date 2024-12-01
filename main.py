@@ -13,6 +13,7 @@ from config import (
     CAPACITIES_SPACE_ID,
     ARTICLES_PER_RUN,
     ARTICLES_UPDATED_AFTER,
+    DEFAULT_TAGS,
     get_processed_ids,
     add_processed_id,
     get_reference_timestamp
@@ -353,7 +354,8 @@ def main():
                     title=title,
                     description=description,
                     notes=notes,
-                    author=author
+                    author=author,
+                    tags=DEFAULT_TAGS
                 )
                 
                 processed_count += 1

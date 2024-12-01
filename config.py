@@ -16,6 +16,7 @@ CAPACITIES_BASE_URL = 'https://api.capacities.io'
 # Processing configuration
 ARTICLES_PER_RUN = 5
 ARTICLES_UPDATED_AFTER = "2024-11-01"
+DEFAULT_TAGS = ['a-processar', 'readwise']
 
 # File paths
 PROCESSED_IDS_FILE = Path('processed_ids.txt')
