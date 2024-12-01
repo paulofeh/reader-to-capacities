@@ -41,6 +41,12 @@ jobs:
         run: |
           git config --global user.name 'GitHub Action'
           git config --global user.email 'action@github.com'
-          git add processed_ids.txt
-          git diff --quiet && git diff --staged --quiet || git commit -m "Update processed articles list"
-          git push
+
+          # Check if there are any changes to processed_ids.txt
+          if git status --porcelain | grep "processed_ids.txt"; then
+            git add processed_ids.txt
+            git commit -m "Update processed articles list [skip ci]"
+            git push
+          else
+            echo "No changes to processed_ids.txt"
+          fi

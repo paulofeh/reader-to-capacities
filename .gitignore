@@ -4,7 +4,3 @@ __pycache__/
 *$py.class
 venv/
 .env
-
-# Project specific
-processed_ids.txt
-debug/
