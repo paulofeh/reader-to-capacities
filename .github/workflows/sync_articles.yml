@@ -6,8 +6,8 @@ on:
   # Allow manual triggering of the workflow
   workflow_dispatch:
   # Optionally, you could also add a schedule
-  # schedule:
-  #   - cron: '0 */12 * * *'  # Runs every 12 hours
+  schedule:
+     - cron: '0 */12 * * *'  # Runs every 12 hours
 
 jobs:
   sync:
