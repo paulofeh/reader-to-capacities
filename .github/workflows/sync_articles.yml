@@ -1,13 +1,11 @@
-# .github/workflows/sync_articles.yml
-
 name: Sync Readwise Articles to Capacities
 
 on:
-  # Allow manual triggering of the workflow
   workflow_dispatch:
-  # Optionally, you could also add a schedule
-  schedule:
-     - cron: '0 */12 * * *'  # Runs every 12 hours
+
+permissions:
+  contents: write    # This allows the workflow to push changes
+  actions: read      # This is for basic workflow functionality
 
 jobs:
   sync:
