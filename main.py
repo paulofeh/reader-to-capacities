@@ -113,30 +113,30 @@ class ReadwiseClient:
                 
         return {}  # Return empty dict if all retries failed
 
-    def get_articles_with_highlights(self, updated_after: Optional[str] = None, limit: Optional[int] = None) -> List[Dict]:
+    def get_articles_with_highlights(self, updated_after: Optional[str] = None, processed_ids: Optional[set] = None) -> List[Dict]:
         """
-        Fetches articles from the archive in Readwise Reader.
+        Fetches articles from the archive in Readwise Reader that haven't been processed yet.
         
-        This method specifically targets archived articles, which represent content that
-        has been processed and deemed worthy of keeping. The archive status serves as
-        a deliberate signal that the content should be included in the PKM system.
+        This method retrieves all archived articles updated after a certain date and filters out
+        those that have already been processed. This ensures we're always working with new content
+        rather than potentially re-examining already processed articles.
         
         Args:
             updated_after: Optional timestamp to fetch articles updated after this date
-            limit: Optional maximum number of articles to return
+            processed_ids: Set of article IDs that have already been processed
             
         Returns:
-            A list of archived articles, potentially limited to a specified count
+            A list of unprocessed archived articles
         """
         all_articles = []
         next_page_cursor = None
         total_fetched = 0
+        processed_ids = processed_ids or set()
 
         while True:
-            # Include the location parameter to filter for archived items
             params = {
                 "withHtmlContent": "false",
-                "location": "archive"  # This replaces our previous reading_progress filter
+                "location": "archive"
             }
             
             if next_page_cursor:
@@ -152,22 +152,16 @@ class ReadwiseClient:
 
                 articles = data.get("results", [])
                 
-                # We no longer need to filter by reading_progress since we're
-                # already getting archived articles
-                if articles:
-                    # If we have a limit, only take what we need
-                    if limit:
-                        remaining = limit - total_fetched
-                        articles = articles[:remaining]
-                    
-                    all_articles.extend(articles)
-                    total_fetched += len(articles)
-                    logger.info(f"Fetched {len(articles)} archived articles (Total: {total_fetched})")
-                    
-                    # Check if we've reached our limit
-                    if limit and total_fetched >= limit:
-                        logger.info(f"Reached article limit of {limit}")
-                        break
+                # Filter for unprocessed articles
+                new_articles = [
+                    article for article in articles
+                    if article["id"] not in processed_ids
+                ]
+                
+                if new_articles:
+                    all_articles.extend(new_articles)
+                    total_fetched += len(new_articles)
+                    logger.info(f"Fetched {len(new_articles)} new archived articles (Total unprocessed: {total_fetched})")
 
                 next_page_cursor = data.get("nextPageCursor")
                 if not next_page_cursor:
@@ -177,7 +171,7 @@ class ReadwiseClient:
                 logger.error(f"Unexpected error: {e}")
                 break
 
-        logger.info(f"Completed fetching {total_fetched} total archived articles")
+        logger.info(f"Completed fetching {total_fetched} total unprocessed archived articles")
         return all_articles
     
     def get_highlights_for_article(self, article_id: str) -> List[Dict]:
@@ -278,66 +272,78 @@ def process_article_url(article: Dict) -> Optional[str]:
 def main():
     """
     Main function to orchestrate the article fetching and creation process.
-    Only processes articles that have been updated after our reference date,
-    focusing on archived items that represent completed reading.
+    This function coordinates the entire workflow of fetching articles from Readwise Reader
+    and creating corresponding weblinks in Capacities, while maintaining processing history
+    and handling errors appropriately.
     """
+    # Initialize our API clients
     readwise_client = ReadwiseClient(READWISE_TOKEN)
     capacities_client = CapacitiesClient(CAPACITIES_TOKEN, CAPACITIES_SPACE_ID)
+    
+    # Get our record of previously processed articles
     processed_ids = get_processed_ids()
     
     try:
-        # Get the reference timestamp for filtering
+        # Get our reference timestamp for filtering articles
         reference_timestamp = get_reference_timestamp()
         logger.info(f"Fetching articles updated after: {ARTICLES_UPDATED_AFTER}")
         
-        # Include the timestamp in our article fetch
-        articles = readwise_client.get_articles_with_highlights(
+        # Fetch all unprocessed articles that were updated after our reference date
+        all_unprocessed_articles = readwise_client.get_articles_with_highlights(
             updated_after=reference_timestamp,
-            limit=ARTICLES_PER_RUN
+            processed_ids=processed_ids
         )
+        
+        # Take only the first batch of articles according to our per-run limit
+        articles_to_process = all_unprocessed_articles[:ARTICLES_PER_RUN]
         
         logger.info(
-            f"Found {len(articles)} articles to process "
-            f"(limited to {ARTICLES_PER_RUN} per run, "
-            f"updated after {ARTICLES_UPDATED_AFTER})"
+            f"Found {len(all_unprocessed_articles)} unprocessed articles "
+            f"(processing {len(articles_to_process)} this run)"
         )
-
-        articles = readwise_client.get_articles_with_highlights(limit=ARTICLES_PER_RUN)
-        logger.info(f"Found {len(articles)} articles to process (limited to {ARTICLES_PER_RUN} per run)")
         
         processed_count = 0
-        for article in articles:
+        for article in articles_to_process:
             article_id = article["id"]
             
+            # Double-check we haven't processed this article before
             if article_id in processed_ids:
                 continue
             
-            # Extract all article information in one place for clarity
+            # Extract all relevant article information
             title = article["title"]
             url = process_article_url(article)
-            description = article.get("summary", "")  # Now properly defined
-            author = article.get("author", "Unknown")  # Now properly defined with default value
+            description = article.get("summary", "")
+            author = article.get("author", "Unknown")
             
+            # Skip articles without a valid URL
             if not url:
                 logger.warning(f"Skipping article without valid URL: {title}")
                 continue
             
-            # Fetch highlights for this article
+            # Fetch highlights for this specific article
             highlights = readwise_client.get_highlights_for_article(article_id)
             formatted_highlights = readwise_client.format_highlights_markdown(highlights)
             
-            # Prepare notes content with all sections
+            # Prepare the complete notes content with all available information
             notes_parts = []
-                        
-            # Add original article notes
+            
+            # Add reading progress if available
+            if article.get("reading_progress"):
+                notes_parts.append(
+                    f"**Reading Progress:** {article['reading_progress'] * 100:.1f}%"
+                )
+            
+            # Add original article notes if present
             if article.get("notes"):
-                notes_parts.append("\n## Comentários")
+                notes_parts.append("\n## Notes")
                 notes_parts.append(article["notes"])
             
-            # Add highlights
+            # Add formatted highlights if we found any
             if formatted_highlights:
                 notes_parts.append("\n" + formatted_highlights)
             
+            # Combine all notes parts or set to None if empty
             notes = "\n\n".join(notes_parts) if notes_parts else None
             
             try:
@@ -351,16 +357,22 @@ def main():
                 )
                 
                 processed_count += 1
-                logger.info(f"Created weblink in Capacities ({processed_count}/{len(articles)}): {title}")
-                logger.info(f"  - Included {len(highlights)} highlights")
+                logger.info(f"Created weblink in Capacities ({processed_count}/{len(articles_to_process)}): {title}")
+                if highlights:
+                    logger.info(f"  - Included {len(highlights)} highlights")
                 
+                # Mark as processed only after successful creation
                 add_processed_id(article_id)
                 
             except Exception as e:
                 logger.error(f"Failed to create weblink for '{title}': {e}")
                 continue
-
-        logger.info(f"Processing completed successfully. Created {processed_count} new weblinks.")
+        
+        # Log final processing summary
+        logger.info(
+            f"Processing completed successfully. Created {processed_count} new weblinks. "
+            f"{len(all_unprocessed_articles) - len(articles_to_process)} articles remaining."
+        )
         
     except Exception as e:
         logger.error(f"Script failed: {e}")
