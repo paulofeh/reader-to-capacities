@@ -9,11 +9,15 @@ READWISE_TOKEN = os.environ.get('READWISE_TOKEN')
 CAPACITIES_TOKEN = os.environ.get('CAPACITIES_TOKEN')
 CAPACITIES_SPACE_ID = os.environ.get('CAPACITIES_SPACE_ID')
 
-# Other configuration
+# API endpoints
+READWISE_LIST_URL = 'https://readwise.io/api/v3/list/'
+CAPACITIES_BASE_URL = 'https://api.capacities.io'
+
+# Processing configuration
 ARTICLES_PER_RUN = 5
 ARTICLES_UPDATED_AFTER = "2024-11-01"
 
-# File to store processed article IDs
+# File paths
 PROCESSED_IDS_FILE = Path('processed_ids.txt')
 
 # Ensure the processed IDs file exists
@@ -36,9 +40,7 @@ def get_reference_timestamp() -> str:
     Returns a properly formatted timestamp that includes time and timezone information.
     """
     try:
-        # Parse the date and convert it to a timestamp with timezone information
         reference_date = datetime.strptime(ARTICLES_UPDATED_AFTER, "%Y-%m-%d")
-        # Set the time to midnight (00:00:00) and add timezone information
         reference_timestamp = reference_date.replace(
             hour=0, 
             minute=0, 
