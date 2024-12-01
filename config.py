@@ -1,0 +1,51 @@
+# config.py
+
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+
+# API tokens from environment variables
+READWISE_TOKEN = os.environ.get('READWISE_TOKEN')
+CAPACITIES_TOKEN = os.environ.get('CAPACITIES_TOKEN')
+CAPACITIES_SPACE_ID = os.environ.get('CAPACITIES_SPACE_ID')
+
+# Other configuration
+ARTICLES_PER_RUN = 5
+ARTICLES_UPDATED_AFTER = "2024-11-01"
+
+# File to store processed article IDs
+PROCESSED_IDS_FILE = Path('processed_ids.txt')
+
+# Ensure the processed IDs file exists
+if not PROCESSED_IDS_FILE.exists():
+    PROCESSED_IDS_FILE.touch()
+
+def get_processed_ids():
+    """Read the set of previously processed article IDs."""
+    with open(PROCESSED_IDS_FILE, 'r') as f:
+        return set(line.strip() for line in f if line.strip())
+
+def add_processed_id(article_id):
+    """Add a newly processed article ID to the tracking file."""
+    with open(PROCESSED_IDS_FILE, 'a') as f:
+        f.write(f'{article_id}\n')
+
+def get_reference_timestamp() -> str:
+    """
+    Converts our reference date into the ISO 8601 format required by the Readwise API.
+    Returns a properly formatted timestamp that includes time and timezone information.
+    """
+    try:
+        # Parse the date and convert it to a timestamp with timezone information
+        reference_date = datetime.strptime(ARTICLES_UPDATED_AFTER, "%Y-%m-%d")
+        # Set the time to midnight (00:00:00) and add timezone information
+        reference_timestamp = reference_date.replace(
+            hour=0, 
+            minute=0, 
+            second=0, 
+            microsecond=0, 
+            tzinfo=timezone.utc
+        )
+        return reference_timestamp.isoformat()
+    except ValueError as e:
+        raise ValueError(f"Invalid reference date format in config: {e}")
