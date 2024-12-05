@@ -249,17 +249,48 @@ def process_article_url(article: Dict) -> Optional[str]:
     """
     Process the article URL based on its category and source.
     Returns a valid URL or None if no valid URL can be created.
+    
+    This function handles different types of content, including YouTube videos,
+    email newsletters, and web articles. For YouTube videos, it ensures we're
+    using the original source URL since the Readwise reader URL won't work
+    properly with the Capacities API.
     """
     category = article.get("category", "").lower()
     source_url = article.get("source_url")
     url = article.get("url")
     
+    # Check if this is a YouTube video by examining the source URL
+    if source_url and "youtube.com" in source_url:
+        # Always use the original YouTube URL for videos
+        return source_url
+    
     if category == "email":
-        # For email newsletters, we'll use the Readwise reader URL as a fallback
+        # For email newsletters, use the Readwise reader URL as a fallback
         return url if url else None
     else:
         # For web articles, prefer the original source URL
         return source_url if source_url else url
+    
+def clean_youtube_title(title: str) -> str:
+    """
+    Cleans YouTube-style titles by removing common patterns and making them
+    more readable in Capacities.
+    
+    For example, transforms:
+    "MELHORES PREDIOS | Something else" into "Melhores Predios: Something else"
+    """
+    if "|" in title:
+        # Split on the vertical bar and clean up each part
+        parts = [part.strip() for part in title.split("|")]
+        # Convert the first part from uppercase to title case
+        parts[0] = parts[0].title()
+        # Join with a colon instead of the vertical bar
+        return ": ".join(parts)
+    return title
+
+# In main(), before creating the weblink:
+if "youtube.com" in url:
+    title = clean_youtube_title(title)
 
 def main():
     """
@@ -307,7 +338,11 @@ def main():
             url = process_article_url(article)
             description = article.get("summary", "")
             author = article.get("author", "Unknown")
-            
+
+            # Cleans up youtube titles            
+            if "youtube.com" in url:
+                title = clean_youtube_title(title)
+
             # Skip articles without a valid URL
             if not url:
                 logger.warning(f"Skipping article without valid URL: {title}")
