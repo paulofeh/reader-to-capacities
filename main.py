@@ -180,27 +180,13 @@ class ReadwiseClient:
         return all_articles
     
     def get_highlights_for_article(self, article_id: str) -> List[Dict]:
-        """
-        Fetches all highlights for a specific article.
-        
-        This method queries the Readwise API to get all highlights associated with
-        the given article ID. It handles pagination and ensures we stay within
-        rate limits while fetching the highlights.
-        
-        Args:
-            article_id: The unique identifier of the article in Readwise
-            
-        Returns:
-            A list of highlights, each containing the highlighted text and any notes
-        """
         highlights = []
         params = {
             "withHtmlContent": "false",
-            "category": "highlight",  # We only want highlights
+            "category": "highlight",
         }
 
         try:
-            # Make the API request with proper rate limiting
             self._wait_for_rate_limit()
             response = requests.get(
                 READWISE_LIST_URL,
@@ -210,15 +196,17 @@ class ReadwiseClient:
             response.raise_for_status()
             data = response.json()
 
-            # Filter highlights for our specific article
+            # Filter highlights and sort by creation date
             article_highlights = [
                 highlight for highlight in data.get("results", [])
                 if highlight.get("parent_id") == article_id
             ]
-
+            
             if article_highlights:
-                highlights.extend(article_highlights)
-                logger.info(f"Found {len(article_highlights)} highlights for article")
+                # Sort by created_at timestamp
+                sorted_highlights = sorted(article_highlights, key=lambda x: x.get('created_at', ''))
+                highlights.extend(sorted_highlights)
+                logger.info(f"Found {len(sorted_highlights)} highlights for article")
 
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to fetch highlights: {e}")
