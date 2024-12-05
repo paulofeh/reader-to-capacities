@@ -7,6 +7,22 @@ from typing import Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 class CapacitiesClient:
+    def __init__(self, token: str, space_id: str):
+        """
+        Initialize the Capacities API client.
+        
+        Args:
+            token: The API authentication token for Capacities
+            space_id: The ID of the space where content will be saved
+        """
+        self.token = token
+        self.space_id = space_id
+        self.headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        self.base_url = "https://api.capacities.io"
+        
     def _truncate_text(self, text: str, max_length: int) -> str:
         """
         Intelligently truncates text to the specified maximum length.
