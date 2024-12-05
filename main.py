@@ -288,10 +288,6 @@ def clean_youtube_title(title: str) -> str:
         return ": ".join(parts)
     return title
 
-# In main(), before creating the weblink:
-if "youtube.com" in url:
-    title = clean_youtube_title(title)
-
 def main():
     """
     Main function to orchestrate the article fetching and creation process.
@@ -339,8 +335,8 @@ def main():
             description = article.get("summary", "")
             author = article.get("author", "Unknown")
 
-            # Cleans up youtube titles            
-            if "youtube.com" in url:
+            # Clean up YouTube titles if applicable
+            if url and "youtube.com" in url:  # Check if url exists and is a YouTube link
                 title = clean_youtube_title(title)
 
             # Skip articles without a valid URL
