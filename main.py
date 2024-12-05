@@ -11,12 +11,14 @@ from config import (
     CAPACITIES_TOKEN,
     CAPACITIES_SPACE_ID,
     ARTICLES_PER_RUN,
+    ARTICLES_UPDATED_AFTER,
     DEFAULT_TAGS,
     get_processed_ids,
     add_processed_id,
     get_reference_timestamp
 )
 
+# Set up logging to help us track what's happening when the script runs
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -240,48 +242,36 @@ class ReadwiseClient:
                     formatted_parts.append(f"  \n  *Nota: {note}*")
 
         return "\n".join(formatted_parts)
-        
-def process_article_url(article: Dict) -> Optional[str]:
-    """
-    Process the article URL based on its category and source.
-    Returns a valid URL or None if no valid URL can be created.
-    
-    This function handles different types of content, including YouTube videos,
-    email newsletters, and web articles. For YouTube videos, it ensures we're
-    using the original source URL since the Readwise reader URL won't work
-    properly with the Capacities API.
-    """
-    category = article.get("category", "").lower()
-    source_url = article.get("source_url")
-    url = article.get("url")
-    
-    # Check if this is a YouTube video by examining the source URL
-    if source_url and "youtube.com" in source_url:
-        # Always use the original YouTube URL for videos
-        return source_url
-    
-    if category == "email":
-        # For email newsletters, use the Readwise reader URL as a fallback
-        return url if url else None
-    else:
-        # For web articles, prefer the original source URL
-        return source_url if source_url else url
 
 def main():
+    """
+    Main function to orchestrate the article fetching and creation process.
+    This function coordinates the entire workflow of fetching articles from Readwise Reader
+    and creating corresponding weblinks in Capacities, while maintaining processing history
+    and handling errors appropriately.
+    """
+    # Initialize our API clients
     readwise_client = ReadwiseClient(READWISE_TOKEN)
     capacities_client = CapacitiesClient(CAPACITIES_TOKEN, CAPACITIES_SPACE_ID)
+    
+    # Get our record of previously processed articles
     processed_ids = get_processed_ids()
     
     try:
+        # Get our reference timestamp for filtering articles
         reference_timestamp = get_reference_timestamp()
+        logger.info(f"Fetching articles updated after: {ARTICLES_UPDATED_AFTER}")
+        
+        # Fetch all unprocessed articles that were updated after our reference date
         all_unprocessed_articles = readwise_client.get_articles_with_highlights(
             updated_after=reference_timestamp,
             processed_ids=processed_ids
         )
         
+        # Take only the first batch of articles according to our per-run limit
         articles_to_process = all_unprocessed_articles[:ARTICLES_PER_RUN]
         logger.info(f"Processing {len(articles_to_process)} articles")
-        
+
         processed_count = 0
         for article in articles_to_process:
             if article["id"] in processed_ids:
