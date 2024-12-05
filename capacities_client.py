@@ -20,15 +20,8 @@ class CapacitiesClient:
         }
         self.base_url = "https://api.capacities.io"
 
-    def create_weblink(
-        self,
-        url: str,
-        title: Optional[str] = None,
-        description: Optional[str] = None,
-        tags: Optional[List[str]] = None,
-        notes: Optional[str] = None,
-        author: Optional[str] = None
-    ) -> Dict:
+    def create_weblink(self, url: str, title: Optional[str] = None, description: Optional[str] = None, 
+                  tags: Optional[List[str]] = None, notes: Optional[str] = None, author: Optional[str] = None) -> Dict:
         """
         Creates a weblink in Capacities using the /save-weblink endpoint.
         
@@ -40,41 +33,43 @@ class CapacitiesClient:
             notes: Optional markdown text for notes (max 200000 chars)
             author: Optional author name to be included in markdown text
         """
-        # Prepare the base markdown text with author and notes
-        md_parts = []
-        
-        if author:
-            md_parts.append(f"**Autor:** {author}")
-        
-        if notes:
-            md_parts.append(notes)
-            
-        md_text = "\n\n".join(md_parts) if md_parts else None
-
-        # Prepare the request payload
-        payload = {
-            "spaceId": self.space_id,
-            "url": url,
-        }
-
-        if title:
-            payload["titleOverwrite"] = title[:500]
-        if description:
-            payload["descriptionOverwrite"] = description[:1000]
-        if tags:
-            payload["tags"] = tags[:30]
-        if md_text:
-            payload["mdText"] = md_text[:200000]
-
         try:
+            md_parts = []
+            if author:
+                md_parts.append(f"**Autor:** {author}")
+            if notes:
+                md_parts.append(notes)
+                
+            md_text = "\n\n".join(md_parts) if md_parts else None
+
+            payload = {
+                "spaceId": self.space_id,
+                "url": url,
+            }
+
+            if title:
+                payload["titleOverwrite"] = title[:500]
+            if description:
+                payload["descriptionOverwrite"] = description[:1000]
+            if tags:
+                payload["tags"] = tags[:30]
+            if md_text:
+                payload["mdText"] = md_text[:200000]
+
             response = requests.post(
                 f"{self.base_url}/save-weblink",
                 headers=self.headers,
                 json=payload
             )
             response.raise_for_status()
-            return response.json()
             
+            if not response.ok:
+                error_detail = response.json().get('detail', 'No error detail provided')
+                logger.error(f"API Error: {error_detail}")
+                
+            return response.json()
+                
         except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to create weblink in Capacities: {e}")
+            error_detail = e.response.json() if hasattr(e, 'response') else str(e)
+            logger.error(f"Failed to create weblink in Capacities: {error_detail}")
             raise
