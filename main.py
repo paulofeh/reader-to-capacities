@@ -1,10 +1,9 @@
 import requests
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from time import sleep
 from typing import Optional, Dict, List
 from capacities_client import CapacitiesClient
-from pathlib import Path
 
 from config import (
     READWISE_TOKEN,
@@ -12,38 +11,35 @@ from config import (
     CAPACITIES_TOKEN,
     CAPACITIES_SPACE_ID,
     ARTICLES_PER_RUN,
-    ARTICLES_UPDATED_AFTER,
     DEFAULT_TAGS,
     get_processed_ids,
     add_processed_id,
     get_reference_timestamp
 )
 
-# Set up logging to help us track what's happening when the script runs
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-import requests
-import logging
-from datetime import datetime, timezone
-from time import sleep
-from typing import Optional, Dict, List
+def process_article_url(article: Dict) -> Optional[str]:
+    """Returns the most appropriate URL for the article based on its type."""
+    source_url = article.get("source_url")
+    url = article.get("url")
+    
+    if source_url and "youtube.com" in source_url:
+        return source_url
+    
+    return source_url if source_url else url
 
-from config import (
-    READWISE_TOKEN,
-    READWISE_LIST_URL,
-    get_processed_ids,
-    add_processed_id
-)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+def clean_youtube_title(title: str) -> str:
+    """Formats YouTube-style titles to be more readable."""
+    if "|" in title:
+        parts = [part.strip() for part in title.split("|")]
+        parts[0] = parts[0].title()
+        return ": ".join(parts)
+    return title
 
 class ReadwiseClient:
     """Handles interactions with the Readwise Reader API with improved rate limiting."""
@@ -270,137 +266,70 @@ def process_article_url(article: Dict) -> Optional[str]:
     else:
         # For web articles, prefer the original source URL
         return source_url if source_url else url
-    
-def clean_youtube_title(title: str) -> str:
-    """
-    Cleans YouTube-style titles by removing common patterns and making them
-    more readable in Capacities.
-    
-    For example, transforms:
-    "MELHORES PREDIOS | Something else" into "Melhores Predios: Something else"
-    """
-    if "|" in title:
-        # Split on the vertical bar and clean up each part
-        parts = [part.strip() for part in title.split("|")]
-        # Convert the first part from uppercase to title case
-        parts[0] = parts[0].title()
-        # Join with a colon instead of the vertical bar
-        return ": ".join(parts)
-    return title
 
 def main():
-    """
-    Main function to orchestrate the article fetching and creation process.
-    This function coordinates the entire workflow of fetching articles from Readwise Reader
-    and creating corresponding weblinks in Capacities, while maintaining processing history
-    and handling errors appropriately.
-    """
-    # Initialize our API clients
     readwise_client = ReadwiseClient(READWISE_TOKEN)
     capacities_client = CapacitiesClient(CAPACITIES_TOKEN, CAPACITIES_SPACE_ID)
-    
-    # Get our record of previously processed articles
     processed_ids = get_processed_ids()
     
     try:
-        # Get our reference timestamp for filtering articles
         reference_timestamp = get_reference_timestamp()
-        logger.info(f"Fetching articles updated after: {ARTICLES_UPDATED_AFTER}")
-        
-        # Fetch all unprocessed articles that were updated after our reference date
         all_unprocessed_articles = readwise_client.get_articles_with_highlights(
             updated_after=reference_timestamp,
             processed_ids=processed_ids
         )
         
-        # Take only the first batch of articles according to our per-run limit
         articles_to_process = all_unprocessed_articles[:ARTICLES_PER_RUN]
-        
-        logger.info(
-            f"Found {len(all_unprocessed_articles)} unprocessed articles "
-            f"(processing {len(articles_to_process)} this run)"
-        )
+        logger.info(f"Processing {len(articles_to_process)} articles")
         
         processed_count = 0
         for article in articles_to_process:
-            article_id = article["id"]
-            
-            # Double-check we haven't processed this article before
-            if article_id in processed_ids:
+            if article["id"] in processed_ids:
                 continue
-            
-            # Extract all relevant article information
+                
             title = article["title"]
             url = process_article_url(article)
-            description = article.get("summary", "")
-            author = article.get("author", "Unknown")
-
-            # Clean up YouTube titles if applicable
-            if url and "youtube.com" in url:  # Check if url exists and is a YouTube link
-                title = clean_youtube_title(title)
-
-            # Skip articles without a valid URL
             if not url:
-                logger.warning(f"Skipping article without valid URL: {title}")
                 continue
-            
-            # Fetch highlights for this specific article
-            highlights = readwise_client.get_highlights_for_article(article_id)
+                
+            if "youtube.com" in url:
+                title = clean_youtube_title(title)
+                
+            highlights = readwise_client.get_highlights_for_article(article["id"])
             formatted_highlights = readwise_client.format_highlights_markdown(highlights)
             
-            # Prepare the complete notes content with all available information
             notes_parts = []
-            
-            # Add reading progress if available
             if article.get("reading_progress"):
-                notes_parts.append(
-                    f"**Reading Progress:** {article['reading_progress'] * 100:.1f}%"
-                )
-            
-            # Add original article notes if present
+                notes_parts.append(f"**Reading Progress:** {article['reading_progress'] * 100:.1f}%")
             if article.get("notes"):
                 notes_parts.append("\n## Notes")
                 notes_parts.append(article["notes"])
-            
-            # Add formatted highlights if we found any
             if formatted_highlights:
                 notes_parts.append("\n" + formatted_highlights)
-            
-            # Combine all notes parts or set to None if empty
-            notes = "\n\n".join(notes_parts) if notes_parts else None
-            
-            try:
-                # Create the weblink in Capacities
-                tags = list(article.get('tags', []))  # Add this
-                if DEFAULT_TAGS:                      # Add this
-                    tags.extend(DEFAULT_TAGS)         # Add this
+                
+            tags = list(article.get('tags', []))
+            if DEFAULT_TAGS:
+                tags.extend(DEFAULT_TAGS)
 
+            try:
                 created_weblink = capacities_client.create_weblink(
                     url=url,
                     title=title,
-                    description=description,
-                    notes=notes,
-                    author=author,
-                    tags=tags  # Update this line
+                    description=article.get("summary", ""),
+                    notes="\n\n".join(notes_parts) if notes_parts else None,
+                    author=article.get("author", "Unknown"),
+                    tags=tags
                 )
                 
                 processed_count += 1
-                logger.info(f"Created weblink in Capacities ({processed_count}/{len(articles_to_process)}): {title}")
-                if highlights:
-                    logger.info(f"  - Included {len(highlights)} highlights")
-                
-                # Mark as processed only after successful creation
-                add_processed_id(article_id)
+                logger.info(f"Created weblink ({processed_count}/{len(articles_to_process)}): {title}")
+                add_processed_id(article["id"])
                 
             except Exception as e:
                 logger.error(f"Failed to create weblink for '{title}': {e}")
                 continue
         
-        # Log final processing summary
-        logger.info(
-            f"Processing completed successfully. Created {processed_count} new weblinks. "
-            f"{len(all_unprocessed_articles) - len(articles_to_process)} articles remaining."
-        )
+        logger.info(f"Processing completed. Created {processed_count} new weblinks.")
         
     except Exception as e:
         logger.error(f"Script failed: {e}")

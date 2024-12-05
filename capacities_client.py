@@ -7,14 +7,27 @@ from typing import Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 class CapacitiesClient:
-    def __init__(self, token: str, space_id: str):
-        self.token = token
-        self.space_id = space_id
-        self.headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
-        self.base_url = "https://api.capacities.io"
+    def _truncate_text(self, text: str, max_length: int) -> str:
+        """
+        Intelligently truncates text to the specified maximum length.
+        If truncation is needed, it adds an ellipsis and tries to break at a sentence or word boundary.
+        """
+        if not text or len(text) <= max_length:
+            return text
+            
+        # Try to find the last sentence boundary within the limit
+        truncated = text[:max_length]
+        last_period = truncated.rfind('.')
+        last_space = truncated.rfind(' ')
+        
+        # Prefer breaking at a sentence boundary, fall back to word boundary
+        break_point = last_period if last_period > max_length * 0.7 else last_space
+        if break_point != -1:
+            truncated = truncated[:break_point + 1]
+        else:
+            truncated = truncated[:max_length - 1]
+            
+        return truncated.strip() + '...'
 
     def create_weblink(
         self,
@@ -26,7 +39,7 @@ class CapacitiesClient:
         author: Optional[str] = None
     ) -> Dict:
         """
-        Creates a weblink in Capacities with enhanced handling for different content types.
+        Creates a weblink in Capacities with proper content length handling.
         """
         try:
             # Build markdown content
@@ -37,31 +50,20 @@ class CapacitiesClient:
                 md_parts.append(notes)
             md_text = "\n\n".join(md_parts) if md_parts else None
 
-            # Base payload
+            # Prepare payload with proper length constraints
             payload = {
                 "spaceId": self.space_id,
                 "url": url,
             }
 
-            # Handle YouTube videos differently
-            if "youtube.com" in url or "youtu.be" in url:
-                # For YouTube videos, we might need to set a specific category
-                payload["category"] = "video"  # If Capacities API supports this
-
-            # Add optional fields
             if title:
-                payload["titleOverwrite"] = title[:500]
+                payload["titleOverwrite"] = self._truncate_text(title, 500)
             if description:
-                payload["descriptionOverwrite"] = description[:1000]
+                payload["descriptionOverwrite"] = self._truncate_text(description, 1000)
             if tags:
                 payload["tags"] = tags[:30]
             if md_text:
-                payload["mdText"] = md_text[:200000]
-
-            # Log the request details for debugging
-            logger.debug(f"Sending request to {self.base_url}/save-weblink")
-            logger.debug(f"Headers: {self.headers}")
-            logger.debug(f"Payload: {payload}")
+                payload["mdText"] = self._truncate_text(md_text, 200000)
 
             # Make the request
             response = requests.post(
@@ -70,19 +72,8 @@ class CapacitiesClient:
                 json=payload
             )
 
-            # Log the response for debugging
-            logger.debug(f"Response status: {response.status_code}")
-            logger.debug(f"Response content: {response.text}")
-
-            # Check if response is valid JSON
-            try:
-                response_data = response.json()
-            except ValueError as json_err:
-                logger.error(f"Invalid JSON response: {response.text}")
-                raise ValueError(f"API returned invalid JSON: {response.text}")
-
             response.raise_for_status()
-            return response_data
+            return response.json()
 
         except requests.exceptions.RequestException as e:
             error_msg = f"Failed to create weblink: {str(e)}"
@@ -92,6 +83,5 @@ class CapacitiesClient:
                     error_msg += f" - Details: {error_detail}"
                 except ValueError:
                     error_msg += f" - Raw response: {e.response.text}"
-
             logger.error(error_msg)
             raise
