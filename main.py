@@ -155,7 +155,11 @@ class ReadwiseClient:
                 
                 # Filter for unprocessed articles
                 new_articles = [
-                    article for article in articles
+                    {
+                        **article,
+                        'tags': article.get('tags', {}).keys()  # Convert tags dict to list
+                    }
+                    for article in articles
                     if article["id"] not in processed_ids
                 ]
                 
@@ -237,17 +241,16 @@ class ReadwiseClient:
         """
         if not highlights:
             return ""
-
+            
+        # Sort highlights by position (chronological order)
+        sorted_highlights = sorted(highlights, key=lambda x: x.get('position', 0))
+        
         formatted_parts = ["## Anotações"]
         
-        for highlight in highlights:
-            # Get the highlighted text from the 'content' field
+        for highlight in sorted_highlights:
             highlighted_text = highlight.get('content', '').strip()
             if highlighted_text:
-                # Add the highlighted text with a bullet point
                 formatted_parts.append(f"\n* {highlighted_text}")
-                
-                # If there's a note associated with the highlight, add it indented
                 note = highlight.get('notes', '').strip()
                 if note:
                     formatted_parts.append(f"  \n  *Nota: {note}*")
@@ -349,13 +352,17 @@ def main():
             
             try:
                 # Create the weblink in Capacities
+                tags = list(article.get('tags', []))  # Add this
+                if DEFAULT_TAGS:                      # Add this
+                    tags.extend(DEFAULT_TAGS)         # Add this
+
                 created_weblink = capacities_client.create_weblink(
                     url=url,
                     title=title,
                     description=description,
                     notes=notes,
                     author=author,
-                    tags=DEFAULT_TAGS
+                    tags=tags  # Update this line
                 )
                 
                 processed_count += 1
