@@ -78,34 +78,20 @@ def verify_article_date(article: Dict, reference_date: str) -> bool:
         Boolean indicating if article should be processed
     """
     try:
-        # Convert reference date string to datetime
+        # Convert reference date string to datetime and ensure it's UTC
         ref_date = datetime.fromisoformat(reference_date.replace('Z', '+00:00'))
         
-        # Get article's relevant dates
-        updated_at = article.get("updated_at")
-        created_at = article.get("created_at")
+        # Get article's saved date (when it was saved to Readwise)
         saved_at = article.get("saved_at")
-        
-        # Convert to datetime objects, handling potential None values
-        dates_to_check = []
-        for date_str in [updated_at, created_at, saved_at]:
-            if date_str:
-                try:
-                    dates_to_check.append(
-                        datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-                    )
-                except ValueError:
-                    continue
-        
-        if not dates_to_check:
-            logger.warning(f"No valid dates found for article: {article.get('title', 'Unknown')}")
+        if not saved_at:
+            logger.warning(f"No saved_at date for article: {article.get('title', 'Unknown')}")
             return False
             
-        # Use the most recent date for comparison
-        most_recent_date = max(dates_to_check)
+        # Convert to datetime object
+        saved_date = datetime.fromisoformat(saved_at.replace('Z', '+00:00'))
         
-        # Article should be processed if its most recent date is after the reference date
-        return most_recent_date > ref_date
+        # Article should be processed if it was saved after or on the reference date
+        return saved_date >= ref_date
         
     except (ValueError, AttributeError) as e:
         logger.error(f"Error processing dates for article {article.get('title', 'Unknown')}: {e}")

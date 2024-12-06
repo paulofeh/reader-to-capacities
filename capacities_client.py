@@ -46,8 +46,7 @@ class CapacitiesClient:
         
     def _sanitize_text(self, text: Optional[str], max_length: int) -> Optional[str]:
         """
-        Sanitizes and truncates text to ensure it's compatible with the API.
-        Now handles emojis and special characters more gracefully.
+        Sanitizes and truncates text while preserving accented characters.
         
         Args:
             text: The text to sanitize
@@ -58,14 +57,12 @@ class CapacitiesClient:
         if not text:
             return None
             
-        # Normalize unicode characters
+        # Normalize unicode characters (this standardizes the representation
+        # but preserves the actual characters)
         text = normalize('NFKC', text)
         
-        # Remove control characters but preserve basic formatting
-        text = re.sub(r'[\u0000-\u0008\u000B-\u000C\u000E-\u001F\u007F-\u009F]', '', text)
-        
-        # Convert emojis to text descriptions or remove them based on context
-        text = text.encode('ascii', 'ignore').decode('ascii')
+        # Remove only control characters while preserving everything else
+        text = re.sub(r'[\u0000-\u0008\u000B-\u000C\u000E-\u001F\u007F]', '', text)
         
         # Preserve markdown formatting while removing multiple spaces
         lines = text.split('\n')
