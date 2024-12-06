@@ -1,8 +1,8 @@
 import requests
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from time import sleep
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 from capacities_client import CapacitiesClient
 
 from config import (
@@ -25,15 +25,136 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def process_article_url(article: Dict) -> Optional[str]:
-    """Returns the most appropriate URL for the article based on its type."""
+def process_article_url(article: Dict) -> Tuple[Optional[str], bool]:
+    """
+    Returns the most appropriate URL for the article and whether it's a forwarded email.
+    
+    Args:
+        article: Article dictionary from Readwise API
+        
+    Returns:
+        Tuple of (processed_url, is_email) where:
+            - processed_url is either a valid URL or None if article should be skipped
+            - is_email is True if the content is from an email/newsletter
+    """
     source_url = article.get("source_url")
-    url = article.get("url")
+    url = article.get("url", "")
+    category = article.get("category", "").lower()
     
+    # Handle email content
+    if (category == "email" or 
+        "reader-forwarded-email" in url or 
+        url.startswith("mailto:") or
+        (source_url and "reader-forwarded-email" in source_url)):
+        
+        # For email content, we'll create a special URL using the article ID
+        # This ensures a unique identifier while making it clear it's email content
+        email_url = f"https://readwise.io/reader/document/{article['id']}"
+        return email_url, True
+    
+    # Handle YouTube content
     if source_url and "youtube.com" in source_url:
-        return source_url
+        return source_url, False
     
-    return source_url if source_url else url
+    # For regular articles, prefer source_url if available
+    final_url = source_url if source_url else url
+    
+    # Skip if no valid URL is found
+    if not final_url or final_url.startswith("mailto:"):
+        logger.warning(f"No valid URL found for article: {article.get('title', 'Unknown')}")
+        return None, False
+        
+    return final_url, False
+
+def verify_article_date(article: Dict, reference_date: str) -> bool:
+    """
+    Verifies if an article should be processed based on its date.
+    
+    Args:
+        article: Article dictionary from Readwise API
+        reference_date: ISO format date string to compare against
+        
+    Returns:
+        Boolean indicating if article should be processed
+    """
+    try:
+        # Convert reference date string to datetime
+        ref_date = datetime.fromisoformat(reference_date.replace('Z', '+00:00'))
+        
+        # Get article's relevant dates
+        updated_at = article.get("updated_at")
+        created_at = article.get("created_at")
+        saved_at = article.get("saved_at")
+        
+        # Convert to datetime objects, handling potential None values
+        dates_to_check = []
+        for date_str in [updated_at, created_at, saved_at]:
+            if date_str:
+                try:
+                    dates_to_check.append(
+                        datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                    )
+                except ValueError:
+                    continue
+        
+        if not dates_to_check:
+            logger.warning(f"No valid dates found for article: {article.get('title', 'Unknown')}")
+            return False
+            
+        # Use the most recent date for comparison
+        most_recent_date = max(dates_to_check)
+        
+        # Article should be processed if its most recent date is after the reference date
+        return most_recent_date > ref_date
+        
+    except (ValueError, AttributeError) as e:
+        logger.error(f"Error processing dates for article {article.get('title', 'Unknown')}: {e}")
+        return False
+    
+def format_email_content(article: Dict, highlights: list) -> str:
+    """
+    Formats email content with special handling for newsletters and forwarded emails.
+    
+    Args:
+        article: Article dictionary from Readwise API
+        highlights: List of highlights for the article
+        
+    Returns:
+        Formatted markdown string for email content
+    """
+    parts = []
+    
+    # Add email-specific metadata
+    if article.get("author"):
+        parts.append(f"**From:** {article['author']}")
+    
+    if article.get("published_date"):
+        parts.append(f"**Date:** {article['published_date']}")
+        
+    if article.get("category") == "email":
+        parts.append("**Type:** Newsletter/Email")
+        
+    # Add summary if available
+    if article.get("summary"):
+        parts.append("\n## Summary")
+        parts.append(article["summary"])
+        
+    # Add the main content sections
+    if article.get("notes"):
+        parts.append("\n## Notes")
+        parts.append(article["notes"])
+        
+    # Format highlights
+    if highlights:
+        parts.append("\n## Highlights")
+        for highlight in sorted(highlights, key=lambda x: x.get('position', 0)):
+            content = highlight.get('content', '').strip()
+            if content:
+                parts.append(f"\n* {content}")
+                if highlight.get('notes'):
+                    parts.append(f"  \n  *Note: {highlight['notes']}*")
+                    
+    return "\n\n".join(parts)
 
 def clean_youtube_title(title: str) -> str:
     """Formats YouTube-style titles to be more readable."""
@@ -243,95 +364,175 @@ class ReadwiseClient:
 
         return "\n".join(formatted_parts)
 
+from datetime import datetime, timezone
+import logging
+from time import sleep
+from typing import Optional, Dict, List, Tuple
+import requests
+
+logger = logging.getLogger(__name__)
+
 def main():
     """
-    Main function to orchestrate the article fetching and creation process.
-    This function coordinates the entire workflow of fetching articles from Readwise Reader
-    and creating corresponding weblinks in Capacities, while maintaining processing history
-    and handling errors appropriately.
+    Main function to orchestrate the article synchronization process between Readwise Reader and Capacities.
+    Handles all scenarios including emails, newsletters, articles, and YouTube content with proper error
+    handling and rate limiting.
     """
-    # Initialize our API clients
+    # Initialize our API clients with rate limiting and retry logic
     readwise_client = ReadwiseClient(READWISE_TOKEN)
     capacities_client = CapacitiesClient(CAPACITIES_TOKEN, CAPACITIES_SPACE_ID)
     
-    # Get our record of previously processed articles
-    processed_ids = get_processed_ids()
-    
     try:
-        # Get our reference timestamp for filtering articles
+        # Initialize processing state
+        processed_ids = get_processed_ids()
         reference_timestamp = get_reference_timestamp()
-        logger.info(f"Fetching articles updated after: {ARTICLES_UPDATED_AFTER}")
+        logger.info(f"Starting sync process. Reference timestamp: {reference_timestamp}")
         
-        # Fetch all unprocessed articles that were updated after our reference date
-        all_unprocessed_articles = readwise_client.get_articles_with_highlights(
-            updated_after=reference_timestamp,
-            processed_ids=processed_ids
+        # Step 1: Fetch all unprocessed articles with proper date filtering
+        try:
+            all_unprocessed_articles = readwise_client.get_articles_with_highlights(
+                updated_after=reference_timestamp,
+                processed_ids=processed_ids
+            )
+            logger.info(f"Found {len(all_unprocessed_articles)} total unprocessed articles")
+        except Exception as e:
+            logger.error(f"Failed to fetch articles from Readwise: {e}")
+            return
+            
+        # Step 2: Apply our per-run limit and date verification
+        articles_to_process = []
+        for article in all_unprocessed_articles[:ARTICLES_PER_RUN]:
+            if verify_article_date(article, reference_timestamp):
+                articles_to_process.append(article)
+            else:
+                logger.debug(f"Skipping article '{article.get('title')}' - before reference date")
+        
+        logger.info(f"Processing batch of {len(articles_to_process)} articles")
+        
+        # Step 3: Process each article with comprehensive error handling
+        processed_count = {'success': 0, 'error': 0, 'skipped': 0}
+        
+        for article in articles_to_process:
+            article_id = article.get('id')
+            title = article.get('title', 'Untitled')
+            
+            try:
+                # Skip if already processed
+                if article_id in processed_ids:
+                    processed_count['skipped'] += 1
+                    logger.debug(f"Skipping already processed article: {title}")
+                    continue
+                    
+                # Handle URL processing and content type determination
+                url, is_email = process_article_url(article)
+                if not url:
+                    processed_count['skipped'] += 1
+                    logger.warning(f"Skipping article with invalid URL: {title}")
+                    continue
+                
+                # Clean and prepare the title
+                cleaned_title = title
+                if "youtube.com" in url:
+                    cleaned_title = clean_youtube_title(title)
+                elif is_email and '🟡' in title:  # Handle emoji in email titles
+                    cleaned_title = title.replace('🟡', '').strip()
+                
+                # Fetch and process highlights with rate limiting
+                try:
+                    highlights = readwise_client.get_highlights_for_article(article_id)
+                    sleep(0.5)  # Basic rate limiting
+                except Exception as e:
+                    logger.error(f"Failed to fetch highlights for '{title}': {e}")
+                    highlights = []
+                
+                # Format content based on type
+                if is_email:
+                    formatted_content = format_email_content(article, highlights)
+                    description = "Email/Newsletter content saved from Readwise Reader"
+                else:
+                    notes_parts = []
+                    
+                    # Add reading progress if available
+                    if article.get("reading_progress"):
+                        progress = article["reading_progress"] * 100
+                        notes_parts.append(f"**Reading Progress:** {progress:.1f}%")
+                    
+                    # Add original notes if available
+                    if article.get("notes"):
+                        notes_parts.append("\n## Notes")
+                        notes_parts.append(article["notes"])
+                    
+                    # Add highlights if available
+                    if highlights:
+                        formatted_highlights = readwise_client.format_highlights_markdown(highlights)
+                        if formatted_highlights:
+                            notes_parts.append("\n" + formatted_highlights)
+                    
+                    formatted_content = "\n\n".join(notes_parts) if notes_parts else None
+                    description = article.get("summary", "")
+                
+                # Prepare tags with proper categorization
+                tags = list(article.get('tags', []))
+                if is_email:
+                    tags.append('email')
+                elif "youtube.com" in url:
+                    tags.append('youtube')
+                if DEFAULT_TAGS:
+                    tags.extend(DEFAULT_TAGS)
+                
+                # Create weblink with retry logic
+                try:
+                    created_weblink = capacities_client.create_weblink(
+                    url=url,
+                    title=cleaned_title,
+                    description=description,
+                    notes=formatted_content,
+                    author=article.get("author", "Unknown"),
+                    tags=tags,
+                    content_type='email' if is_email else ('youtube' if 'youtube.com' in url else 'article')
+                )
+                    
+                    processed_count['success'] += 1
+                    logger.info(
+                        f"Created weblink ({processed_count['success']}/{len(articles_to_process)}): "
+                        f"{cleaned_title}"
+                    )
+                    
+                    # Mark as processed only after successful creation
+                    add_processed_id(article_id)
+                    
+                    # Rate limiting between requests
+                    sleep(1)
+                    
+                except requests.exceptions.RequestException as e:
+                    processed_count['error'] += 1
+                    logger.error(f"API error creating weblink for '{cleaned_title}': {e}")
+                    continue
+                    
+            except Exception as e:
+                processed_count['error'] += 1
+                logger.error(f"Unexpected error processing article '{title}': {e}")
+                continue
+        
+        # Final summary logging
+        logger.info(
+            f"Processing completed. Results:\n"
+            f"- Successfully created: {processed_count['success']} weblinks\n"
+            f"- Errors: {processed_count['error']}\n"
+            f"- Skipped: {processed_count['skipped']}\n"
         )
         
-        # Take only the first batch of articles according to our per-run limit
-        articles_to_process = all_unprocessed_articles[:ARTICLES_PER_RUN]
-        logger.info(f"Processing {len(articles_to_process)} articles")
-
-        processed_count = 0
-        for article in articles_to_process:
-            if article["id"] in processed_ids:
-                continue
-                
-            title = article["title"]
-            url = process_article_url(article)
-            if not url:
-                continue
-                
-            if "youtube.com" in url:
-                title = clean_youtube_title(title)
-                
-            highlights = readwise_client.get_highlights_for_article(article["id"])
-            formatted_highlights = readwise_client.format_highlights_markdown(highlights)
-            
-            notes_parts = []
-            if article.get("reading_progress"):
-                notes_parts.append(f"**Reading Progress:** {article['reading_progress'] * 100:.1f}%")
-            if article.get("notes"):
-                notes_parts.append("\n## Notes")
-                notes_parts.append(article["notes"])
-            if formatted_highlights:
-                notes_parts.append("\n" + formatted_highlights)
-                
-            tags = list(article.get('tags', []))
-            if DEFAULT_TAGS:
-                tags.extend(DEFAULT_TAGS)
-
-            try:
-                created_weblink = capacities_client.create_weblink(
-                    url=url,
-                    title=title,
-                    description=article.get("summary", ""),
-                    notes="\n\n".join(notes_parts) if notes_parts else None,
-                    author=article.get("author", "Unknown"),
-                    tags=tags
-                )
-                
-                processed_count += 1
-                logger.info(f"Created weblink ({processed_count}/{len(articles_to_process)}): {title}")
-                add_processed_id(article["id"])
-                
-            except ValueError as e:
-                # Handle validation errors (bad URLs, etc.)
-                logger.warning(f"Validation error for '{title}': {e}")
-                continue
-            except requests.exceptions.RequestException as e:
-                # Handle API errors
-                logger.error(f"API error for '{title}': {e}")
-                continue
-            except Exception as e:
-                # Handle unexpected errors
-                logger.error(f"Unexpected error for '{title}': {e}")
-                continue
-        
-        logger.info(f"Processing completed. Created {processed_count} new weblinks.")
-        
     except Exception as e:
-        logger.error(f"Script failed: {e}")
+        logger.error(f"Fatal error in main process: {e}")
+        raise
+        
+    finally:
+        # Any cleanup needed would go here
+        pass
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        logger.error(f"Script failed with error: {e}")
+        raise
