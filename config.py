@@ -15,7 +15,7 @@ CAPACITIES_BASE_URL = 'https://api.capacities.io'
 
 # Processing configuration
 ARTICLES_PER_RUN = 5
-ARTICLES_UPDATED_AFTER = "2024-12-05T00:00:00+00:00"
+ARTICLES_UPDATED_AFTER = "2024-12-05"
 DEFAULT_TAGS = ['a-processar', 'readwise']
 
 # File paths
