@@ -315,8 +315,17 @@ def main():
                 logger.info(f"Created weblink ({processed_count}/{len(articles_to_process)}): {title}")
                 add_processed_id(article["id"])
                 
+            except ValueError as e:
+                # Handle validation errors (bad URLs, etc.)
+                logger.warning(f"Validation error for '{title}': {e}")
+                continue
+            except requests.exceptions.RequestException as e:
+                # Handle API errors
+                logger.error(f"API error for '{title}': {e}")
+                continue
             except Exception as e:
-                logger.error(f"Failed to create weblink for '{title}': {e}")
+                # Handle unexpected errors
+                logger.error(f"Unexpected error for '{title}': {e}")
                 continue
         
         logger.info(f"Processing completed. Created {processed_count} new weblinks.")
