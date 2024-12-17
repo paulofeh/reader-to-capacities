@@ -1,42 +1,42 @@
 name: Sync Readwise Articles to Capacities
 
 on:
-  workflow_dispatch:  # Keep manual trigger
+  workflow_dispatch: # Keep manual trigger
   schedule:
-    - cron: '0 */12 * * *'  # Runs every 12 hours
+    - cron: "0 3 * * *" # Runs at midnight São Paulo time (UTC-3)
 
 permissions:
-  contents: write    # This allows the workflow to push changes
-  actions: read      # This is for basic workflow functionality
+  contents: write # This allows the workflow to push changes
+  actions: read # This is for basic workflow functionality
 
 jobs:
   sync:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v3
-      
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
-      
+          python-version: "3.10"
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      
+
       - name: Create empty processed_ids file if it doesn't exist
         run: touch processed_ids.txt
-      
+
       - name: Run sync script
         env:
           READWISE_TOKEN: ${{ secrets.READWISE_TOKEN }}
           CAPACITIES_TOKEN: ${{ secrets.CAPACITIES_TOKEN }}
           CAPACITIES_SPACE_ID: ${{ secrets.CAPACITIES_SPACE_ID }}
         run: python main.py
-      
+
       - name: Commit and push if processed_ids.txt changed
         run: |
           git config --global user.name 'GitHub Action'
